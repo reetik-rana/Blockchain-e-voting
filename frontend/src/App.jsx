@@ -16,6 +16,7 @@ function App() {
   const [lastVote, setLastVote] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [contractInfo, setContractInfo] = useState(null)
+  const [selectedAddress, setSelectedAddress] = useState(null)
   const [chainCandidates, setChainCandidates] = useState(null)
   const [networkMismatch, setNetworkMismatch] = useState(null)
   const [isRegisteredOnChain, setIsRegisteredOnChain] = useState(null)
@@ -85,7 +86,8 @@ function App() {
           // We have a contract deployed on this network id; proceed without mismatch
           setNetworkMismatch(null)
         }
-        const election = new web3.eth.Contract(contractInfo.abi, electionAddress)
+  const election = new web3.eth.Contract(contractInfo.abi, electionAddress)
+  setSelectedAddress(electionAddress)
         const count = await election.methods.candidatesCount().call()
         const list = []
         for (let i = 1; i <= Number(count); i++) {
@@ -93,11 +95,22 @@ function App() {
           list.push({ id: Number(c[0]), name: c[1], voteCount: Number(c[2]) })
         }
         setChainCandidates(list)
-        // Load contract owner (for admin auto-detect)
+        // Load contract owner (for admin auto-detect). Try wallet provider first, then HTTP fallback.
         try {
           const o = await election.methods.owner().call()
           setOwnerAddress(o)
-        } catch (_) { setOwnerAddress(null) }
+        } catch (_) {
+          // fallback: try local HTTP provider against the network-matched address
+          try {
+            const w3 = new Web3('http://127.0.0.1:7545')
+            const nid = await w3.eth.net.getId()
+            const addrByNet = contractInfo.addressesByNetwork || {}
+            const addrFor = addrByNet[nid] || electionAddress
+            const e2 = new w3.eth.Contract(contractInfo.abi, addrFor)
+            const o2 = await e2.methods.owner().call()
+            setOwnerAddress(o2)
+          } catch (_) { setOwnerAddress(null) }
+        }
         // Check registration status for current account if present
         if (account) {
           try {
@@ -194,11 +207,11 @@ function App() {
 
       // 3) Derive a hash we could send on-chain later (demonstration only)
       const web3 = new Web3(window.ethereum || Web3.givenProvider)
-      const voteHash = web3.utils.sha3(JSON.stringify({ cid, candidateId, voter: account }))
+  const voteHash = web3.utils.sha3(JSON.stringify({ cid, candidateId, voter: account }))
 
       // 4) Optionally call the contract to record the vote on-chain
       if (contractInfo && window.ethereum) {
-        const election = new web3.eth.Contract(contractInfo.abi, contractInfo.address)
+        const election = new web3.eth.Contract(contractInfo.abi, selectedAddress || contractInfo.address)
         try {
           // Re-check registration if unknown
           if (isRegisteredOnChain === null) {
@@ -290,17 +303,18 @@ function App() {
   // Pages (defined inline to reuse state without prop drilling)
   const LoginPage = () => {
     const navigate = useNavigate()
+    const [adminDetected, setAdminDetected] = useState(false)
     const handleLoggedIn = (u) => {
       setUser(u)
       try { localStorage.setItem('evote_user', JSON.stringify(u)) } catch {}
       navigate(`/u/${u.address}`)
     }
-    // Auto-login if connected wallet is the contract owner on the correct network
+    // Detect admin wallet but do not auto-login; show CTA instead
     useEffect(() => {
       if (!user && account && ownerAddress && !networkMismatch) {
-        if (account.toLowerCase() === ownerAddress.toLowerCase()) {
-          handleLoggedIn({ address: account, cid: null })
-        }
+        setAdminDetected(account.toLowerCase() === ownerAddress.toLowerCase())
+      } else {
+        setAdminDetected(false)
       }
     }, [user, account, ownerAddress, networkMismatch])
     return (
@@ -316,10 +330,13 @@ function App() {
               </div>
             </div>
           )}
-          {account && ownerAddress && account.toLowerCase() === ownerAddress.toLowerCase() && (
-            <div className="card" style={{marginBottom:12, background:'#eff6ff', color:'#1e40af', display:'flex', alignItems:'center', gap:8}}>
-              <div style={{padding:'2px 8px', background:'#1d4ed8', color:'#fff', borderRadius:999, fontSize:12, fontWeight:700}}>ADMIN</div>
-              <div className="mono text-clip" title={account}>Admin wallet detected: {account}</div>
+          {adminDetected && (
+            <div className="card" style={{marginBottom:12, background:'#eff6ff', color:'#1e40af', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{padding:'2px 8px', background:'#1d4ed8', color:'#fff', borderRadius:999, fontSize:12, fontWeight:700}}>ADMIN</div>
+                <div className="mono text-clip" title={account}>Admin wallet detected: {account}</div>
+              </div>
+              <button className="vote-btn" onClick={() => handleLoggedIn({ address: account, cid: null })}>Login as Admin</button>
             </div>
           )}
           <Auth onLogin={handleLoggedIn} />
@@ -380,6 +397,11 @@ function App() {
               This wallet is not registered on-chain. Ask the admin (contract owner) to register you.
             </div>
           )}
+          {contractInfo && !networkMismatch && chainCandidates && chainCandidates.length === 0 && (
+            <div className="card" style={{marginTop:12, background:'#fff7ed', color:'#9a3412'}}>
+              No on-chain candidates yet. Ask the admin to add candidates (Login as Admin on the home page), or redeploy the contracts with seeds.
+            </div>
+          )}
           <div className="candidate-grid" style={{marginTop:12}}>
             {(chainCandidates || candidates).map(c => (
               <CandidateCard key={c.id} candidate={c} onVote={handleVote} disabled={!account || submitting} />
@@ -397,10 +419,11 @@ function App() {
             </div>
           )}
 
-          {contractInfo && (
+          {contractInfo && user && ownerAddress && user.address && ownerAddress && (user.address.toLowerCase() === ownerAddress.toLowerCase()) && !networkMismatch && (
             <Admin
               account={account}
               contractInfo={contractInfo}
+              selectedAddress={selectedAddress}
               networkMismatch={networkMismatch}
               onActionSuccess={() => setLastVote({ ...lastVote })}
             />
@@ -413,7 +436,16 @@ function App() {
   return (
     <BrowserRouter>
       <div className="app-shell">
-        <Header account={account} onConnect={handleConnect} user={user} onLogout={handleLogout} />
+        <Header
+          account={account}
+          onConnect={handleConnect}
+          user={user}
+          onLogout={handleLogout}
+          contractInfo={contractInfo}
+          ownerAddress={ownerAddress}
+          networkMismatch={networkMismatch}
+          selectedAddress={selectedAddress}
+        />
 
         <div className="hero">
           <div>

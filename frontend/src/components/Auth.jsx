@@ -51,25 +51,51 @@ function Auth({ onLogin }) {
     if (!done) {
       try {
         const resC = await fetch('http://localhost:3001/contract')
-        if (resC.ok && (window.ethereum || Web3.givenProvider)) {
+        if (resC.ok) {
           const info = await resC.json()
-          const web3 = new Web3(window.ethereum || Web3.givenProvider)
-          const election = new web3.eth.Contract(info.abi, info.address)
-          // Owner shortcut: allow admin to login even if not registered
-          try {
-            const o = await election.methods.owner().call()
-            if (o && o.toLowerCase() === addr.toLowerCase()) {
-              setStatus('Admin (owner) account detected')
-              onLogin({ address: addr, cid: null })
-              done = true
-            }
-          } catch (_) {}
-          if (!done) {
-            const reg = await election.methods.registered(addr).call()
-            if (reg) {
-              setStatus('Registered on-chain')
-              onLogin({ address: addr, cid: null })
-              done = true
+          // Pick the correct contract address based on current provider's network
+          const pickAddressFor = async (web3) => {
+            try {
+              const nid = await web3.eth.net.getId()
+              const byNet = info.addressesByNetwork || {}
+              return byNet[nid] || info.address
+            } catch { return info.address }
+          }
+
+          // Try wallet provider first
+          let web3 = null
+          if (window.ethereum) web3 = new Web3(window.ethereum)
+          // If no wallet provider, try local HTTP fallback
+          const fallbacks = [
+            web3,
+            new Web3('http://127.0.0.1:7545')
+          ].filter(Boolean)
+
+          for (const w3 of fallbacks) {
+            try {
+              const addressForNet = await pickAddressFor(w3)
+              const election = new w3.eth.Contract(info.abi, addressForNet)
+              // Owner shortcut: allow admin to login even if not registered
+              try {
+                const o = await election.methods.owner().call()
+                if (o && o.toLowerCase() === addr.toLowerCase()) {
+                  setStatus('Admin (owner) account detected')
+                  onLogin({ address: addr, cid: null })
+                  done = true
+                  break
+                }
+              } catch (_) {}
+              if (!done) {
+                const reg = await election.methods.registered(addr).call()
+                if (reg) {
+                  setStatus('Registered on-chain')
+                  onLogin({ address: addr, cid: null })
+                  done = true
+                  break
+                }
+              }
+            } catch (_) {
+              // try next provider
             }
           }
         }

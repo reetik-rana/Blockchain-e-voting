@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import Web3 from 'web3'
 
-function Admin({ account, contractInfo, onActionSuccess, networkMismatch }) {
+function Admin({ account, contractInfo, onActionSuccess, networkMismatch, selectedAddress }) {
   const [owner, setOwner] = useState(null)
   const [isOwner, setIsOwner] = useState(false)
   const [candidateName, setCandidateName] = useState('')
@@ -12,9 +12,11 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch }) {
   useEffect(() => {
     async function loadOwner() {
       try {
-        if (!contractInfo || !window.ethereum || networkMismatch) return
-        const web3 = new Web3(window.ethereum)
-        const election = new web3.eth.Contract(contractInfo.abi, contractInfo.address)
+  if (!contractInfo || networkMismatch) return
+  // prefer wallet provider for tx, but fall back to HTTP for read
+  const web3 = window.ethereum ? new Web3(window.ethereum) : new Web3('http://127.0.0.1:7545')
+  const addr = selectedAddress || contractInfo.address
+  const election = new web3.eth.Contract(contractInfo.abi, addr)
         const o = await election.methods.owner().call()
         setOwner(o)
         setIsOwner(account && o && account.toLowerCase() === o.toLowerCase())
@@ -33,8 +35,9 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch }) {
     try {
       setBusy(true)
       setNote('Submitting transaction…')
-      const web3 = new Web3(window.ethereum)
-      const election = new web3.eth.Contract(contractInfo.abi, contractInfo.address)
+  const web3 = new Web3(window.ethereum)
+  const addr = selectedAddress || contractInfo.address
+  const election = new web3.eth.Contract(contractInfo.abi, addr)
       await election.methods.addCandidate(candidateName.trim()).send({ from: account })
       setCandidateName('')
       setNote('Candidate added')
@@ -55,8 +58,9 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch }) {
     try {
       setBusy(true)
       setNote('Submitting transaction…')
-      const web3 = new Web3(window.ethereum)
-      const election = new web3.eth.Contract(contractInfo.abi, contractInfo.address)
+  const web3 = new Web3(window.ethereum)
+  const addr = selectedAddress || contractInfo.address
+  const election = new web3.eth.Contract(contractInfo.abi, addr)
       await election.methods.registerVoter(addr).send({ from: account })
       setVoterAddress('')
       setNote('Voter registered')
