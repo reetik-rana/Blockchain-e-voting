@@ -12,20 +12,27 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch, select
   useEffect(() => {
     async function loadOwner() {
       try {
-  if (!contractInfo || networkMismatch) return
-  // prefer wallet provider for tx, but fall back to HTTP for read
-  const web3 = window.ethereum ? new Web3(window.ethereum) : new Web3('http://127.0.0.1:7545')
-  const addr = selectedAddress || contractInfo.address
-  const election = new web3.eth.Contract(contractInfo.abi, addr)
+        if (!contractInfo || networkMismatch) {
+          console.log('[Admin] No contract info or network mismatch', { contractInfo, networkMismatch })
+          return
+        }
+        // prefer wallet provider for tx, but fall back to HTTP for read
+        const web3 = window.ethereum ? new Web3(window.ethereum) : new Web3('http://127.0.0.1:7545')
+        const contractAddr = selectedAddress || contractInfo.address
+        console.log('[Admin] Loading owner from contract:', contractAddr)
+        const election = new web3.eth.Contract(contractInfo.abi, contractAddr)
         const o = await election.methods.owner().call()
+        console.log('[Admin] Contract owner:', o)
+        console.log('[Admin] Current account:', account)
+        console.log('[Admin] Owner match:', account && o && account.toLowerCase() === o.toLowerCase())
         setOwner(o)
         setIsOwner(account && o && account.toLowerCase() === o.toLowerCase())
       } catch (e) {
-        // noop
+        console.error('[Admin] Error loading owner:', e)
       }
     }
     loadOwner()
-  }, [contractInfo, account, networkMismatch])
+  }, [contractInfo, account, networkMismatch, selectedAddress])
 
   async function addCandidate() {
     if (!candidateName.trim()) {
@@ -35,9 +42,9 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch, select
     try {
       setBusy(true)
       setNote('Submitting transaction…')
-  const web3 = new Web3(window.ethereum)
-  const addr = selectedAddress || contractInfo.address
-  const election = new web3.eth.Contract(contractInfo.abi, addr)
+      const web3 = new Web3(window.ethereum)
+      const contractAddr = selectedAddress || contractInfo.address
+      const election = new web3.eth.Contract(contractInfo.abi, contractAddr)
       await election.methods.addCandidate(candidateName.trim()).send({ from: account })
       setCandidateName('')
       setNote('Candidate added')
@@ -50,18 +57,18 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch, select
   }
 
   async function registerVoter() {
-    const addr = voterAddress.trim()
-    if (!addr) {
+    const voterAddr = voterAddress.trim()
+    if (!voterAddr) {
       setNote('Enter a wallet address to register')
       return
     }
     try {
       setBusy(true)
       setNote('Submitting transaction…')
-  const web3 = new Web3(window.ethereum)
-  const addr = selectedAddress || contractInfo.address
-  const election = new web3.eth.Contract(contractInfo.abi, addr)
-      await election.methods.registerVoter(addr).send({ from: account })
+      const web3 = new Web3(window.ethereum)
+      const contractAddr = selectedAddress || contractInfo.address
+      const election = new web3.eth.Contract(contractInfo.abi, contractAddr)
+      await election.methods.registerVoter(voterAddr).send({ from: account })
       setVoterAddress('')
       setNote('Voter registered')
       onActionSuccess && onActionSuccess()
