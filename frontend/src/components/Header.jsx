@@ -38,22 +38,42 @@ function Header({ account, onConnect, user, onLogout, contractInfo, ownerAddress
       </header>
 
       {/* Diagnostics strip - small, non-intrusive */}
-      <div style={{display:'flex',gap:12,alignItems:'center',marginTop:8,marginBottom:12,fontSize:12,color:'#374151'}}>
+      <div style={{display:'flex',gap:12,alignItems:'center',marginTop:8,marginBottom:12,fontSize:12,color:'#374151',flexWrap:'wrap'}}>
+        <div className="card" style={{padding:'8px 12px',borderRadius:8,background:'#eff6ff',border:'1px solid #bfdbfe'}}>
+          <div className="muted-small">Connected Address</div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <div className="mono text-clip" style={{maxWidth:280}} title={account || 'Not connected'}>
+              {account || '—'}
+            </div>
+            {user && user.role === 'admin' && (
+              <span style={{padding:'1px 6px',background:'#059669',color:'#fff',borderRadius:999,fontSize:10,fontWeight:700}}>ADMIN</span>
+            )}
+            {user && user.role === 'voter' && user.verified && (
+              <span style={{padding:'1px 6px',background:'#0284c7',color:'#fff',borderRadius:999,fontSize:10,fontWeight:700}}>VOTER</span>
+            )}
+            {user && user.role === 'voter' && !user.verified && (
+              <span style={{padding:'1px 6px',background:'#f59e0b',color:'#fff',borderRadius:999,fontSize:10,fontWeight:700}}>PENDING</span>
+            )}
+          </div>
+        </div>
+
         <div className="card" style={{padding:'8px 12px',borderRadius:8,background:'#fbfbff'}}>
-          <div className="muted-small">Contract</div>
-          <div className="mono text-clip" style={{maxWidth:420}} title={selectedAddress || (contractInfo && contractInfo.address)}>
+          <div className="muted-small">Contract Address</div>
+          <div className="mono text-clip" style={{maxWidth:280}} title={selectedAddress || (contractInfo && contractInfo.address)}>
             {selectedAddress || (contractInfo && contractInfo.address) || '—'}
           </div>
         </div>
 
         <div className="card" style={{padding:'8px 12px',borderRadius:8,background:'#fbfbff'}}>
-          <div className="muted-small">Contract network</div>
-          <div>{networkMismatch ? `${networkMismatch.targetId} (mismatch)` : (contractInfo ? contractInfo.networkId : '—')}</div>
+          <div className="muted-small">Network ID</div>
+          <div>{networkMismatch ? (
+            <span style={{color:'#dc2626'}}>⚠️ {networkMismatch.targetId} (mismatch)</span>
+          ) : (contractInfo ? contractInfo.networkId : '—')}</div>
         </div>
 
         <div className="card" style={{padding:'8px 12px',borderRadius:8,background:'#fbfbff'}}>
-          <div className="muted-small">Owner</div>
-          <div className="mono text-clip" style={{maxWidth:240}} title={ownerAddress}>{ownerAddress || '—'}</div>
+          <div className="muted-small">Owner (Admin)</div>
+          <div className="mono text-clip" style={{maxWidth:200}} title={ownerAddress}>{ownerAddress || '—'}</div>
         </div>
       </div>
     </div>

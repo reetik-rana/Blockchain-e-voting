@@ -74,19 +74,26 @@ function Auth({ onLogin }) {
           for (const w3 of fallbacks) {
             try {
               const addressForNet = await pickAddressFor(w3)
+              console.log('[Auth] Checking contract at:', addressForNet)
               const election = new w3.eth.Contract(info.abi, addressForNet)
               // Owner shortcut: allow admin to login even if not registered
               try {
                 const o = await election.methods.owner().call()
+                console.log('[Auth] Contract owner:', o)
+                console.log('[Auth] User address:', addr)
+                console.log('[Auth] Match:', o && o.toLowerCase() === addr.toLowerCase())
                 if (o && o.toLowerCase() === addr.toLowerCase()) {
                   setStatus('Admin (owner) account detected')
                   onLogin({ address: addr, cid: null })
                   done = true
                   break
                 }
-              } catch (_) {}
+              } catch (e) {
+                console.error('[Auth] Error checking owner:', e)
+              }
               if (!done) {
                 const reg = await election.methods.registered(addr).call()
+                console.log('[Auth] Registration status:', reg)
                 if (reg) {
                   setStatus('Registered on-chain')
                   onLogin({ address: addr, cid: null })
@@ -94,7 +101,8 @@ function Auth({ onLogin }) {
                   break
                 }
               }
-            } catch (_) {
+            } catch (e) {
+              console.error('[Auth] Provider error:', e)
               // try next provider
             }
           }

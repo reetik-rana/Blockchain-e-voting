@@ -21,6 +21,8 @@ function App() {
   const [networkMismatch, setNetworkMismatch] = useState(null)
   const [isRegisteredOnChain, setIsRegisteredOnChain] = useState(null)
   const [ownerAddress, setOwnerAddress] = useState(null)
+  const lastAutoLoginAccount = React.useRef(null)
+  const [loginTrigger, setLoginTrigger] = useState(0)
 
   useEffect(() => {
     async function init() {
@@ -98,8 +100,10 @@ function App() {
         // Load contract owner (for admin auto-detect). Try wallet provider first, then HTTP fallback.
         try {
           const o = await election.methods.owner().call()
+          console.log('[App] Contract owner loaded:', o)
           setOwnerAddress(o)
-        } catch (_) {
+        } catch (err) {
+          console.warn('[App] Failed to load owner from wallet provider:', err)
           // fallback: try local HTTP provider against the network-matched address
           try {
             const w3 = new Web3('http://127.0.0.1:7545')
@@ -108,8 +112,12 @@ function App() {
             const addrFor = addrByNet[nid] || electionAddress
             const e2 = new w3.eth.Contract(contractInfo.abi, addrFor)
             const o2 = await e2.methods.owner().call()
+            console.log('[App] Contract owner loaded (fallback):', o2)
             setOwnerAddress(o2)
-          } catch (_) { setOwnerAddress(null) }
+          } catch (err2) { 
+            console.error('[App] Failed to load owner (fallback):', err2)
+            setOwnerAddress(null) 
+          }
         }
         // Check registration status for current account if present
         if (account) {
@@ -127,6 +135,81 @@ function App() {
     loadFromChain()
   }, [contractInfo, lastVote, account])
 
+  // Auto-login when account is connected and owner address is known
+  useEffect(() => {
+    async function autoLogin() {
+      if (!account || !contractInfo || !ownerAddress) {
+        console.log('[App] Auto-login skip - missing requirements:', { account: !!account, contractInfo: !!contractInfo, ownerAddress: !!ownerAddress })
+        return
+      }
+      
+      // Check if we've already auto-logged in for this account in this session
+      const accountKey = account.toLowerCase()
+      
+      // If loginTrigger changed, reset the ref to force re-login
+      if (loginTrigger > 0) {
+        console.log('[App] Login trigger detected - forcing re-login check')
+        lastAutoLoginAccount.current = null
+      }
+      
+      // Skip if user is logged in AND ref matches (and we're not forcing re-login)
+      if (user && user.address && lastAutoLoginAccount.current === accountKey) {
+        console.log('[App] Already auto-logged in for this account in this session')
+        return
+      }
+
+      console.log('[App] Auto-login triggered - Account:', account, 'Owner:', ownerAddress, 'User state:', user ? 'logged in' : 'logged out', 'Trigger:', loginTrigger)
+      lastAutoLoginAccount.current = accountKey
+      
+      // Check if account is the owner
+      if (account.toLowerCase() === ownerAddress.toLowerCase()) {
+        console.log('[App] Auto-login: Admin account detected!')
+        const userData = { address: account, cid: null, role: 'admin' }
+        setUser(userData)
+        try { localStorage.setItem('evote_user', JSON.stringify(userData)) } catch {}
+        setToast({ message: 'Logged in as Admin', type: 'success' })
+        return
+      }
+
+      // Check if account is registered as voter on blockchain
+      try {
+        const web3 = new Web3(window.ethereum)
+        const election = new web3.eth.Contract(contractInfo.abi, selectedAddress || contractInfo.address)
+        const reg = await election.methods.registered(account).call()
+        
+        if (reg) {
+          console.log('[App] Auto-login: Registered voter detected!')
+          const userData = { address: account, cid: null, role: 'voter', verified: true }
+          setUser(userData)
+          try { localStorage.setItem('evote_user', JSON.stringify(userData)) } catch {}
+          setToast({ message: 'Logged in as Voter', type: 'success' })
+        } else {
+          // Check if user completed registration on website but not verified by admin
+          try {
+            const map = JSON.parse(localStorage.getItem('demo_vid_map') || '{}')
+            if (map[account.toLowerCase()]) {
+              console.log('[App] Auto-login: Unverified registration found')
+              const userData = { address: account, cid: null, role: 'voter', verified: false }
+              setUser(userData)
+              try { localStorage.setItem('evote_user', JSON.stringify(userData)) } catch {}
+              setToast({ message: 'Logged in (Pending Admin Verification)', type: 'warning' })
+              return
+            }
+          } catch {}
+          
+          console.log('[App] Account not registered')
+          // Clear any previous login
+          setUser(null)
+          try { localStorage.removeItem('evote_user') } catch {}
+        }
+      } catch (e) {
+        console.error('[App] Auto-login error:', e)
+      }
+    }
+    
+    autoLogin()
+  }, [account, ownerAddress, contractInfo, selectedAddress, loginTrigger])
+
   const handleConnect = async () => {
     if (!window.ethereum) {
       setToast({ message: 'MetaMask not detected. Please install it to connect.', type: 'error' })
@@ -142,6 +225,9 @@ function App() {
       } catch (_) { /* ignore; not all wallets support this cleanly */ }
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
       setAccount(accounts[0])
+      // Reset the ref and trigger auto-login
+      lastAutoLoginAccount.current = null
+      setLoginTrigger(prev => prev + 1)
       setToast({ message: 'Wallet connected', type: 'success' })
     } catch (e) {
       setToast({ message: 'Connection rejected', type: 'error' })
@@ -152,12 +238,18 @@ function App() {
     try { localStorage.removeItem('evote_user') } catch {}
     setUser(null)
     setLastVote(null)
+    lastAutoLoginAccount.current = null // Reset to allow re-login
+    setLoginTrigger(0) // Reset trigger back to 0
     setToast({ message: 'Logged out', type: 'success' })
   }
 
   const handleVote = async (candidateId) => {
     if (!account) {
       setToast({ message: 'Connect your wallet first', type: 'error' })
+      return
+    }
+    if (user && user.verified === false) {
+      setToast({ message: 'Voting is disabled. Your registration is pending admin verification.', type: 'error' })
       return
     }
     if (networkMismatch) {
@@ -309,7 +401,16 @@ function App() {
       try { localStorage.setItem('evote_user', JSON.stringify(u)) } catch {}
       navigate(`/u/${u.address}`)
     }
-    // Detect admin wallet but do not auto-login; show CTA instead
+    
+    // Auto-redirect when user is logged in (by the auto-login effect in App)
+    useEffect(() => {
+      if (user && user.address) {
+        console.log('[LoginPage] User logged in, redirecting to home page')
+        navigate(`/u/${user.address}`)
+      }
+    }, [user, navigate])
+    
+    // Detect admin wallet
     useEffect(() => {
       if (!user && account && ownerAddress && !networkMismatch) {
         setAdminDetected(account.toLowerCase() === ownerAddress.toLowerCase())
@@ -330,13 +431,43 @@ function App() {
               </div>
             </div>
           )}
-          {adminDetected && (
-            <div className="card" style={{marginBottom:12, background:'#eff6ff', color:'#1e40af', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8}}>
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <div style={{padding:'2px 8px', background:'#1d4ed8', color:'#fff', borderRadius:999, fontSize:12, fontWeight:700}}>ADMIN</div>
-                <div className="mono text-clip" title={account}>Admin wallet detected: {account}</div>
+          {account && !user && contractInfo && !networkMismatch && (
+            <div className="card" style={{marginBottom:12, background:'#f0fdf4', color:'#065f46'}}>
+              <div style={{fontSize:14}}>
+                {adminDetected ? (
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div style={{padding:'2px 8px', background:'#059669', color:'#fff', borderRadius:999, fontSize:12, fontWeight:700}}>ADMIN</div>
+                    <div>Admin account detected! Auto-logging you in...</div>
+                  </div>
+                ) : isRegisteredOnChain ? (
+                  <div>✓ Wallet connected. Registered voter detected! Auto-logging you in...</div>
+                ) : isRegisteredOnChain === false ? (
+                  (() => {
+                    // Check if user has local registration
+                    try {
+                      const map = JSON.parse(localStorage.getItem('demo_vid_map') || '{}')
+                      if (map[account.toLowerCase()]) {
+                        return (
+                          <div style={{background:'#fef3c7',color:'#92400e',padding:12,borderRadius:8}}>
+                            <div style={{fontWeight:600,marginBottom:4}}>⚠️ Registration Pending Admin Verification</div>
+                            <div style={{fontSize:13}}>
+                              You have completed website registration, but your wallet is not verified on the blockchain yet. 
+                              Please ask the admin to approve your registration.
+                            </div>
+                          </div>
+                        )
+                      }
+                    } catch {}
+                    return (
+                      <div style={{background:'#fef2f2',color:'#991b1b',padding:12,borderRadius:8}}>
+                        ⚠️ This wallet is not registered. Please go to Register page to complete verification.
+                      </div>
+                    )
+                  })()
+                ) : (
+                  <div>✓ Wallet connected. Checking registration status...</div>
+                )}
               </div>
-              <button className="vote-btn" onClick={() => handleLoggedIn({ address: account, cid: null })}>Login as Admin</button>
             </div>
           )}
           <Auth onLogin={handleLoggedIn} />
@@ -360,16 +491,107 @@ function App() {
       <div className="layout">
         <div>
           <div className="card" style={{marginTop:0}}>
-            <div className="muted" style={{fontSize:13,marginBottom:6}}>Session</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr',gap:6}}>
-              <div className="mono text-clip" title={account || 'not connected'}><b>Account:</b> {account ?? 'not connected'}</div>
-              <div><b>Status:</b> {user ? 'Registered' : 'Guest'}</div>
-              {user && <div className="mono text-wrap"><b>CID:</b> {user.cid}</div>}
+            <h3 style={{marginTop:0,marginBottom:12,fontSize:16}}>System Information</h3>
+            <div style={{display:'grid',gap:10}}>
+              {/* Current User Address */}
+              <div>
+                <div className="muted" style={{fontSize:12,marginBottom:4}}>Connected Address</div>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div className="mono text-clip" style={{flex:1,fontSize:14,background:'#f3f4f6',padding:'6px 10px',borderRadius:6}} title={account || 'Not connected'}>
+                    {account || 'Not connected'}
+                  </div>
+                  {user && user.role === 'admin' && (
+                    <div style={{padding:'2px 8px',background:'#059669',color:'#fff',borderRadius:999,fontSize:11,fontWeight:700}}>ADMIN</div>
+                  )}
+                  {user && user.role === 'voter' && user.verified && (
+                    <div style={{padding:'2px 8px',background:'#0284c7',color:'#fff',borderRadius:999,fontSize:11,fontWeight:700}}>VOTER</div>
+                  )}
+                  {user && user.role === 'voter' && !user.verified && (
+                    <div style={{padding:'2px 8px',background:'#f59e0b',color:'#fff',borderRadius:999,fontSize:11,fontWeight:700}}>PENDING</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Contract Owner */}
+              {ownerAddress && (
+                <div>
+                  <div className="muted" style={{fontSize:12,marginBottom:4}}>Contract Owner (Admin)</div>
+                  <div className="mono text-clip" style={{fontSize:13,background:'#f3f4f6',padding:'6px 10px',borderRadius:6}} title={ownerAddress}>
+                    {ownerAddress}
+                  </div>
+                </div>
+              )}
+
+              {/* Contract Address */}
+              {contractInfo && (
+                <div>
+                  <div className="muted" style={{fontSize:12,marginBottom:4}}>Contract Address</div>
+                  <div className="mono text-clip" style={{fontSize:13,background:'#f3f4f6',padding:'6px 10px',borderRadius:6}} title={selectedAddress || contractInfo.address}>
+                    {selectedAddress || contractInfo.address}
+                  </div>
+                </div>
+              )}
+
+              {/* Network Info */}
+              {contractInfo && (
+                <div>
+                  <div className="muted" style={{fontSize:12,marginBottom:4}}>Network</div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div style={{fontSize:13,background:'#f3f4f6',padding:'6px 10px',borderRadius:6,flex:1}}>
+                      {networkMismatch ? (
+                        <span style={{color:'#dc2626'}}>
+                          ⚠️ Mismatch (Wallet: {networkMismatch.currentId}, Contract: {networkMismatch.targetId})
+                        </span>
+                      ) : (
+                        <span style={{color:'#059669'}}>
+                          ✓ Chain ID: {contractInfo.networkId}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Registration Status */}
+              <div>
+                <div className="muted" style={{fontSize:12,marginBottom:4}}>Registration Status</div>
+                <div style={{fontSize:13,background:'#f3f4f6',padding:'6px 10px',borderRadius:6}}>
+                  {!user ? (
+                    <span style={{color:'#6b7280'}}>Not logged in</span>
+                  ) : user.role === 'admin' ? (
+                    <span style={{color:'#059669'}}>✓ Admin Account</span>
+                  ) : user.verified ? (
+                    <span style={{color:'#059669'}}>✓ Verified Voter (Blockchain Registered)</span>
+                  ) : (
+                    <span style={{color:'#f59e0b'}}>⚠️ Pending Admin Verification</span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
         <div>
+          {user && user.verified === false && (
+            <div className="card" style={{marginBottom:16, background:'#fef3c7', color:'#92400e', borderLeft:'4px solid #f59e0b'}}>
+              <div style={{display:'flex',alignItems:'start',gap:10}}>
+                <div style={{fontSize:20}}>⚠️</div>
+                <div>
+                  <div style={{fontWeight:600,marginBottom:4}}>Registration Pending Admin Verification</div>
+                  <div style={{fontSize:13,lineHeight:1.5}}>
+                    You have completed registration on the website, but your wallet address has not been verified by the admin on the blockchain yet. 
+                    You can view candidates, but <b>voting is disabled</b> until the admin approves your registration.
+                  </div>
+                  <div style={{fontSize:13,marginTop:8,padding:8,background:'#fffbeb',borderRadius:4}}>
+                    <b>Your Wallet:</b> <span className="mono">{account}</span>
+                  </div>
+                  <div style={{fontSize:12,marginTop:6,opacity:0.8}}>
+                    Please contact the admin to verify your wallet address.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="card" style={{marginBottom:16}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <h2 style={{margin:0}}>Candidates</h2>
@@ -404,7 +626,12 @@ function App() {
           )}
           <div className="candidate-grid" style={{marginTop:12}}>
             {(chainCandidates || candidates).map(c => (
-              <CandidateCard key={c.id} candidate={c} onVote={handleVote} disabled={!account || submitting} />
+              <CandidateCard 
+                key={c.id} 
+                candidate={c} 
+                onVote={handleVote} 
+                disabled={!account || submitting || (user && user.verified === false)} 
+              />
             ))}
           </div>
 
