@@ -3,6 +3,20 @@ import { useNavigate } from 'react-router-dom'
 
 function Header({ account, onConnect, user, onLogout, contractInfo, ownerAddress, networkMismatch, selectedAddress }) {
   const navigate = useNavigate()
+  
+  const handleClearLocalData = () => {
+    if (confirm('Clear all local registration data? This will remove demo voter registrations from localStorage.')) {
+      try {
+        localStorage.removeItem('demo_vid_map')
+        localStorage.removeItem('evote_user')
+        alert('Local data cleared! Please refresh the page.')
+        window.location.reload()
+      } catch (e) {
+        alert('Failed to clear data: ' + e.message)
+      }
+    }
+  }
+  
   return (
     <div>
       <header className="card" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}> 
@@ -75,6 +89,15 @@ function Header({ account, onConnect, user, onLogout, contractInfo, ownerAddress
           <div className="muted-small">Owner (Admin)</div>
           <div className="mono text-clip" style={{maxWidth:200}} title={ownerAddress}>{ownerAddress || '—'}</div>
         </div>
+
+        <button 
+          className="vote-btn" 
+          onClick={handleClearLocalData}
+          style={{padding:'8px 12px',fontSize:12,background:'#dc2626'}}
+          title="Clear demo registration data from localStorage"
+        >
+          Clear Local Data
+        </button>
       </div>
     </div>
   )

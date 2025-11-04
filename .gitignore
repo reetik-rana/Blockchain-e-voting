@@ -21,3 +21,6 @@ frontend/dist/
 
 # IPFS
 .ipfs/
+
+# Ganache database
+ganache_db/

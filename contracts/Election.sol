@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity 0.8.19;
 
-contract Election {
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract Election is Pausable, ReentrancyGuard {
     address public owner;
 
     struct Candidate {
@@ -18,12 +21,32 @@ contract Election {
     mapping(address => uint) public votes; // candidateId
     mapping(address => bytes32) public voteHashes; // hash of encrypted vote stored on IPFS
 
-    event VoterRegistered(address voter);
-    event CandidateAdded(uint id, string name);
-    event VoteCast(address voter, uint candidateId, bytes32 voteHash);
+    // Voting period
+    uint public votingStart;
+    uint public votingEnd;
+    bool public votingPeriodSet;
+
+    event VoterRegistered(address indexed voter);
+    event CandidateAdded(uint indexed id, string name);
+    event VoteCast(address indexed voter, uint indexed candidateId, bytes32 voteHash);
+    event VotingPeriodSet(uint startTime, uint endTime);
+    event EmergencyPaused(address indexed by);
+    event EmergencyUnpaused(address indexed by);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "only owner");
+        _;
+    }
+
+    modifier onlyRegistered() {
+        require(registered[msg.sender], "not registered");
+        _;
+    }
+
+    modifier duringVotingPeriod() {
+        require(votingPeriodSet, "voting period not set");
+        require(block.timestamp >= votingStart, "voting not started");
+        require(block.timestamp <= votingEnd, "voting ended");
         _;
     }
 
@@ -31,22 +54,53 @@ contract Election {
         owner = msg.sender;
     }
 
-    function addCandidate(string memory name) public onlyOwner {
+    // Set voting period (can only be set once or by owner before voting starts)
+    function setVotingPeriod(uint _start, uint _end) public onlyOwner {
+        require(_start < _end, "invalid period");
+        require(_start >= block.timestamp, "start must be in future");
+        require(!votingPeriodSet || block.timestamp < votingStart, "cannot change during/after voting");
+        
+        votingStart = _start;
+        votingEnd = _end;
+        votingPeriodSet = true;
+        
+        emit VotingPeriodSet(_start, _end);
+    }
+
+    function addCandidate(string memory name) public onlyOwner whenNotPaused {
+        require(bytes(name).length > 0, "name cannot be empty");
+        require(!votingPeriodSet || block.timestamp < votingStart, "cannot add candidates during/after voting");
+        
         candidatesCount++;
         candidates[candidatesCount] = Candidate(candidatesCount, name, 0);
         emit CandidateAdded(candidatesCount, name);
     }
 
-    function registerVoter(address _voter) public onlyOwner {
+    function registerVoter(address _voter) public onlyOwner whenNotPaused {
+        require(_voter != address(0), "invalid address");
+        require(_voter != owner, "owner cannot vote");
+        require(!registered[_voter], "already registered");
+        
         registered[_voter] = true;
         emit VoterRegistered(_voter);
     }
 
+    // Emergency pause/unpause
+    function pause() public onlyOwner {
+        _pause();
+        emit EmergencyPaused(msg.sender);
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
+        emit EmergencyUnpaused(msg.sender);
+    }
+
     // candidateId must be valid and voter must be registered
     // voteHash should be the SHA-256 (or keccak) hash of the encrypted vote stored off-chain (IPFS)
-    function castVote(uint candidateId, bytes32 voteHash) public {
-        require(registered[msg.sender], "not registered");
+    function castVote(uint candidateId, bytes32 voteHash) public onlyRegistered duringVotingPeriod whenNotPaused nonReentrant {
         require(candidateId > 0 && candidateId <= candidatesCount, "invalid candidate");
+        require(voteHash != bytes32(0), "invalid vote hash");
 
         if (hasVoted[msg.sender]) {
             uint prev = votes[msg.sender];
