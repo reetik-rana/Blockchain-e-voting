@@ -630,7 +630,8 @@ function App() {
                 key={c.id} 
                 candidate={c} 
                 onVote={handleVote} 
-                disabled={!account || submitting || (user && user.verified === false)} 
+                disabled={!account || submitting || (user && user.verified === false)}
+                showVoteCount={user && user.role === 'admin'}
               />
             ))}
           </div>

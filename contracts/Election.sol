@@ -69,6 +69,9 @@ contract Election is Pausable, ReentrancyGuard {
 
     function addCandidate(string memory name) public onlyOwner whenNotPaused {
         require(bytes(name).length > 0, "name cannot be empty");
+        require(bytes(name).length <= 100, "name too long");
+        // Prevent addresses from being used as candidate names
+        require(bytes(name).length < 42 || bytes(name)[0] != '0' || bytes(name)[1] != 'x', "invalid name format");
         require(!votingPeriodSet || block.timestamp < votingStart, "cannot add candidates during/after voting");
         
         candidatesCount++;

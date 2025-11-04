@@ -39,8 +39,18 @@ function Admin({ account, contractInfo, onActionSuccess, networkMismatch, select
   }, [contractInfo, account, networkMismatch, selectedAddress])
 
   async function addCandidate() {
-    if (!candidateName.trim()) {
+    const name = candidateName.trim()
+    if (!name) {
       setNote('Enter a candidate name')
+      return
+    }
+    // Prevent Ethereum addresses from being used as candidate names
+    if (/^0x[a-fA-F0-9]{40}$/.test(name)) {
+      setNote('Candidate name cannot be an Ethereum address')
+      return
+    }
+    if (name.length > 100) {
+      setNote('Candidate name is too long (max 100 characters)')
       return
     }
     try {
